@@ -39,7 +39,7 @@
     const SCRIPT_LOGS_MAX_LINES = 200; // 脚本内部日志最大保留行数
     const GM_STORAGE_LOG_KEY = 'catScriptPersistentLogs'; // GM_setValue/GM_getValue用于存储日志的键名
     let scriptLogs = []; // 用于存储脚本内部日志的数组
-    const QUICK_LOG_DISPLAY_COUNT = 3; // 浮窗显示最近几条日志
+    const QUICK_LOG_DISPLAY_COUNT = 5; // 浮窗显示最近几条日志
 
     /**
      * HTML 转义工具函数，防止日志内容中的特殊字符被解析为HTML。
@@ -215,21 +215,22 @@
     /**
      * 发送远程状态更新到Google Sheet。
      */
-    function sendRemoteStatus() {
-        // 计算页面刷新倒计时（格式化为MM:SS）
-        const pageRefreshTotalSeconds = Math.max(0, Math.floor(pageRefreshRemainingTime / 1000));
-        const pageRefreshMinutes = Math.floor(pageRefreshTotalSeconds / 60);
-        const pageRefreshSeconds = pageRefreshTotalSeconds % 60;
-        const formattedPageRefreshCountdown = `${String(pageRefreshMinutes).padStart(2, '0')}:${String(pageRefreshSeconds).padStart(2, '0')}`;
 
-        const statusData = {
-            type: 'statusUpdate',
-            countdown: formattedPageRefreshCountdown, // 发送页面刷新倒计时
-            messageCount: currentMessageCount, // 发送当前消息数
-        };
-        GM_log(`发送状态更新到GAS: 倒计时=${formattedPageRefreshCountdown}, 消息数=${currentMessageCount}`);
-        sendGoogleScriptRequest(statusData);
-    }
+function sendRemoteStatus() {
+    // ... (前面的倒计时计算代码不变) ...
+
+    // 从内存中获取最新的20条日志 (您可以按需修改这个数量)
+    const recentLogs = scriptLogs.slice(Math.max(0, scriptLogs.length - 20));
+
+    const statusData = {
+        type: 'statusUpdate',
+        countdown: formattedPageRefreshCountdown,
+        messageCount: currentMessageCount,
+        logs: recentLogs  // <-- 新增：将最近的日志打包进去
+    };
+    GM_log(`发送状态更新到GAS: 倒计时=${formattedPageRefreshCountdown}, 消息数=${currentMessageCount}, 日志条数=${recentLogs.length}`);
+    sendGoogleScriptRequest(statusData);
+}
 
     /**
      * 发送掉线提醒邮件。
