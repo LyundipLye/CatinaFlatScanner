@@ -26,7 +26,7 @@
         minRefreshMinutes: 7, // 页面最小刷新间隔 (分钟)
         maxRefreshMinutes: 10, // 页面最大刷新间隔 (分钟)
         // Google Apps Script Web 应用的部署URL。请确保此URL是最新且有效的。
-        googleScriptUrl: "https://script.google.com/macros/s/AKfycbxgLvGctjIGj-Vmx6zLquxc-5fsBu9ik4n_j6XNEFqI_BvfhggrpY7f668OssWbTF_D/exec",
+        googleScriptUrl: "https://script.google.com/macros/s/AKfycbwHXBXAc9W5gObSgBms1H2Z10j-cpZ4P4SY3kct0KSdmWVBF57A7NQ_Tz4iAnqI8cAJ/exec",
         enableEmail: true, // 是否启用邮件通知
         enableSound: true, // 是否启用声音通知
         enablePopup: true, // 是否启用浏览器弹窗通知
