@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      7.9.0
 // @description  Cat in a Flat 网站监控脚本：增加运行日志上报至Google Sheet功能，并修复浮窗日志显示时序错误。
-// @author       Gemini & User
+// @author       Gemini & Caitlye
 // @match        *://catinaflat.co.uk/*
 // @match        *://*.catinaflat.co.uk/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=catinaflat.co.uk
