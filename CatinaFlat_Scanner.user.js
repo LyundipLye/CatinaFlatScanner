@@ -1,19 +1,19 @@
 // ==UserScript==
-// @name        Cat in a Flat UK Monitor
-// @namespace   http://tampermonkey.net/
-// @version     7.8.1
-// @description Cat in a Flat 网站监控脚本：修复浮窗日志显示时序错误。
-// @author      Gemini & User
-// @match       *://catinaflat.co.uk/*
-// @match       *://*.catinaflat.co.uk/*
-// @icon        https://www.google.com/s2/favicons?sz=64&domain=catinaflat.co.uk
-// @grant       GM_notification
-// @grant       GM_log
-// @grant       GM_getValue
-// @grant       GM_setValue
-// @grant       GM_xmlhttpRequest
-// @grant       GM_addStyle
-// @grant       GM_info
+// @name         Cat in a Flat UK Monitor
+// @namespace    http://tampermonkey.net/
+// @version      7.9.0
+// @description  Cat in a Flat 网站监控脚本：增加运行日志上报至Google Sheet功能，并修复浮窗日志显示时序错误。
+// @author       Gemini & User
+// @match        *://catinaflat.co.uk/*
+// @match        *://*.catinaflat.co.uk/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=catinaflat.co.uk
+// @grant        GM_notification
+// @grant        GM_log
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        GM_info
 // ==/UserScript==
 
 (function() {
@@ -39,6 +39,7 @@
     const SCRIPT_LOGS_MAX_LINES = 200; // 脚本内部日志最大保留行数
     const GM_STORAGE_LOG_KEY = 'catScriptPersistentLogs'; // GM_setValue/GM_getValue用于存储日志的键名
     let scriptLogs = []; // 用于存储脚本内部日志的数组
+    // 【修改点 1】将浮窗显示的日志数量从 3 改为 5
     const QUICK_LOG_DISPLAY_COUNT = 5; // 浮窗显示最近几条日志
 
     /**
@@ -68,8 +69,8 @@
         const quickLogsDiv = document.getElementById('ciaf-quick-logs');
         if (quickLogsDiv) {
             const recentLogsDisplay = scriptLogs.slice(Math.max(0, scriptLogs.length - QUICK_LOG_DISPLAY_COUNT))
-                                                .map(log => escapeHtml(log))
-                                                .join('<br>');
+                                              .map(log => escapeHtml(log))
+                                              .join('<br>');
             quickLogsDiv.innerHTML = recentLogsDisplay;
         }
     }
@@ -215,22 +216,28 @@
     /**
      * 发送远程状态更新到Google Sheet。
      */
+    // 【修改点 2】修改此函数，使其发送状态的同时也发送日志
+    function sendRemoteStatus() {
+        // 计算页面刷新倒计时（格式化为MM:SS）
+        const pageRefreshTotalSeconds = Math.max(0, Math.floor(pageRefreshRemainingTime / 1000));
+        const pageRefreshMinutes = Math.floor(pageRefreshTotalSeconds / 60);
+        const pageRefreshSeconds = pageRefreshTotalSeconds % 60;
+        const formattedPageRefreshCountdown = `${String(pageRefreshMinutes).padStart(2, '0')}:${String(pageRefreshSeconds).padStart(2, '0')}`;
 
-function sendRemoteStatus() {
-    // ... (前面的倒计时计算代码不变) ...
+        // 从内存中获取最新的20条日志
+        const recentLogs = scriptLogs.slice(Math.max(0, scriptLogs.length - 20));
 
-    // 从内存中获取最新的20条日志 (您可以按需修改这个数量)
-    const recentLogs = scriptLogs.slice(Math.max(0, scriptLogs.length - 20));
+        const statusData = {
+            type: 'statusUpdate',
+            countdown: formattedPageRefreshCountdown,
+            messageCount: currentMessageCount,
+            logs: recentLogs  // <-- 新增：将最近的日志打包进去
+        };
 
-    const statusData = {
-        type: 'statusUpdate',
-        countdown: formattedPageRefreshCountdown,
-        messageCount: currentMessageCount,
-        logs: recentLogs  // <-- 新增：将最近的日志打包进去
-    };
-    GM_log(`发送状态更新到GAS: 倒计时=${formattedPageRefreshCountdown}, 消息数=${currentMessageCount}, 日志条数=${recentLogs.length}`);
-    sendGoogleScriptRequest(statusData);
-}
+        GM_log(`发送状态更新到GAS: 倒计时=${formattedPageRefreshCountdown}, 消息数=${currentMessageCount}, 日志条数=${recentLogs.length}`);
+        sendGoogleScriptRequest(statusData);
+    }
+
 
     /**
      * 发送掉线提醒邮件。
@@ -395,7 +402,7 @@ function sendRemoteStatus() {
             <div>页面刷新: ${formattedPageRefresh}${typingStatus}</div>
             <div>GAS更新: ${formattedGasSend}</div>
             <div id="ciaf-quick-logs-display" style="font-size: 11px; margin-top: 5px; border-top: 1px solid rgba(255,255,255,0.2); padding-top: 5px; text-align: left; /* 移除 max-height 和 overflow-y: auto; */">
-                </div>
+            </div>
         `;
         updateQuickLogDisplay(); // 确保浮窗主要内容更新后立即更新日志
     }
@@ -979,8 +986,8 @@ function sendRemoteStatus() {
         const quickLogsDiv = document.getElementById('ciaf-quick-logs-display');
         if (quickLogsDiv) {
             const recentLogsDisplay = scriptLogs.slice(Math.max(0, scriptLogs.length - QUICK_LOG_DISPLAY_COUNT))
-                                                .map(log => escapeHtml(log))
-                                                .join('<br>');
+                                              .map(log => escapeHtml(log))
+                                              .join('<br>');
             quickLogsDiv.innerHTML = recentLogsDisplay;
             // 避免每次更新都重置滚动位置，因为我们已经移除了max-height和overflow-y:auto
             // 如果日志超出可见范围，浏览器会自动扩展浮窗高度
