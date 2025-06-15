@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cat in a Flat UK Monitor
 // @namespace    http://tampermonkey.net/
-// @version      8.0.1
+// @version      8.0.2
 // @description  Cat in a Flat 网站监控脚本：新增本地唤醒检测，修复休眠后无提示问题；优化远程心跳检测逻辑。
 // @author       Gemini & User
 // @match        *://catinaflat.co.uk/*
@@ -354,8 +354,8 @@
     function startTabHeartbeatMonitor() {
         if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
 
-        const checkInterval = 15 * 1000; // 每 15 秒检查一次
-        const staleThreshold = 60 * 1000; // 阈值：1 分钟
+        const checkInterval = 60 * 1000; // 每 1 分钟检查一次
+        const staleThreshold = 60 * 5000; // 阈值：5 分钟
 
         lastHeartbeatCheckTimestamp = Date.now();
         isTabStale = false;
