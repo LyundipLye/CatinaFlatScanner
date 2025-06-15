@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cat in a Flat UK Monitor
 // @namespace    http://tampermonkey.net/
-// @version      8.0.0
+// @version      8.0.1
 // @description  Cat in a Flat 网站监控脚本：新增本地唤醒检测，修复休眠后无提示问题；优化远程心跳检测逻辑。
 // @author       Gemini & User
 // @match        *://catinaflat.co.uk/*
@@ -25,7 +25,7 @@
     const DEFAULTS = {
         minRefreshMinutes: 7, // 页面最小刷新间隔 (分钟)
         maxRefreshMinutes: 10, // 页面最大刷新间隔 (分钟)
-        googleScriptUrl: "https://script.google.com/macros/s/AKfycbyx6BM2Dhki5mWxQf4WKpWlnYBlzl79lCdOcwr39Uvz1rQDoEWte14BDrBEn_8SNvDw/exec",
+        googleScriptUrl: "https://script.google.com/macros/s/AKfycbykkMpNw5TvgisICLy9O6w2FYOSZiDKfCFS0RTTHO_cr_TYnO-ZOYNAoBpZacqKYeTl/exec",
         enableEmail: true, // 是否启用邮件通知
         enableSound: true, // 是否启用声音通知
         enablePopup: true, // 是否启用浏览器弹窗通知
