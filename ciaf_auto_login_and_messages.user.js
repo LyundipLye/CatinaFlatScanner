@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.3
 // @description  智能判断登录状态并在正确页面点击消息链接，使用Base64编码存储密码，并且在inbox页面不跳转。
-// @author       Your Name
+// @author       Caitlye
 // @match        *://*.catinaflat.co.uk/*
 // @grant        GM_setValue
 // @grant        GM_getValue
