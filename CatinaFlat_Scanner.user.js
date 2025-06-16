@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      8.0.2
 // @description  Cat in a Flat 网站监控脚本：新增本地唤醒检测，修复休眠后无提示问题；优化远程心跳检测逻辑。
-// @author       Gemini & User
+// @author       Gemini & CaitLye
 // @match        *://catinaflat.co.uk/*
 // @match        *://*.catinaflat.co.uk/*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=catinaflat.co.uk
