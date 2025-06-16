@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Catinaflat Auto Login & Messages (Full Auto-Pilot)
 // @namespace    http://tampermonkey.net/
-// @version      1.6
-// @description  Intelligently logs in, clears unread messages, closes popups, and navigates to the main board for monitoring.
+// @version      2.4
+// @description  Final version with hybrid logic. Uses URL-based detection overridden by element presence to prevent refresh loops.
 // @author       CaitLye & Gemini
 // @match        *://*.catinaflat.co.uk/*
 // @grant        GM_setValue
@@ -17,11 +17,12 @@
 
     const STORE_EMAIL_KEY = 'catinaflat_email_b64';
     const STORE_PASSWORD_KEY = 'catinaflat_password_b64';
+    const LOGIN_PAGE_URL = 'https://catinaflat.co.uk/login';
 
     function encodeBase64(str) { return btoa(unescape(encodeURIComponent(str))); }
     function decodeBase64(str) { return decodeURIComponent(escape(atob(str))); }
 
-    function waitForElement(selector, timeout = 10000) {
+    function waitForElement(selector, timeout = 5000) {
         return new Promise(resolve => {
             const startTime = Date.now();
             const interval = setInterval(() => {
@@ -37,99 +38,94 @@
         });
     }
 
-    // Main execution function
     async function executeAutoPilot() {
-        console.log('--- Auto-Pilot Script Started (Version 1.6) ---');
+        console.log('--- Auto-Pilot Script Started (Version 2.4) ---');
+        await new Promise(resolve => setTimeout(resolve, 1500));
 
-        // 等待一小段时间，确保页面元素（特别是动态加载的内容）渲染完成
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        const currentPagePath = window.location.pathname;
 
-        // ========================= 【新核心逻辑】 =========================
-        //  第一优先级：检查并处理“Unread messages”列表
-        const unreadMessageLink = document.querySelector('a.BookingSummary--unread-sitter');
-        if (unreadMessageLink) {
-            console.log('[ACTION_UNREAD] Unread message detected on the board. Clicking it to clear...');
-            unreadMessageLink.click();
-            console.log('--- Script Finished: Handled unread message. ---');
-            return; // 点击后，页面会跳转，脚本任务完成
+        // 1. 如果在登录页面，则执行登录
+        if (currentPagePath.startsWith('/login')) {
+            console.log('[STATE_CHECK] On the login page. Filling form...');
+            try {
+                const email = decodeBase64(GM_getValue(STORE_EMAIL_KEY, ''));
+                const password = decodeBase64(GM_getValue(STORE_PASSWORD_KEY, ''));
+                if (!email || !password) return;
+
+                const emailField = await waitForElement('#email');
+                if (!emailField) throw new Error('Email field not found on login page.');
+
+                const passwordField = document.querySelector('#password');
+                const signInButton = document.querySelector('input[type="submit"].Btn--primary');
+                if (!passwordField || !signInButton) throw new Error('Could not find form elements on login page.');
+
+                emailField.value = email;
+                passwordField.value = password;
+                signInButton.click();
+            } catch(error) {
+                console.error('[ERROR] on login page:', error.message);
+            }
+            return;
         }
-        console.log('[CHECK] No priority unread messages found on the board.');
-        // =================================================================
 
-        // 检查是否已登录
-        const messagesLinkIfLoggedIn = document.querySelector('a.Masthead-userNavItemInner--messages[href*="/bookings"]');
+        // 2. 检查是否已登录
+        const messagesLinkIfLoggedIn = await waitForElement('a.Masthead-userNavItemInner--messages[href*="/bookings"]');
 
         if (messagesLinkIfLoggedIn) {
             console.log('[STATE_CHECK] User is logged in.');
 
-            // 第二优先级：检查是否在特定的子页面，如果是，则导航回主看板
-            const currentPagePath = window.location.pathname;
-            if (currentPagePath.includes('/users/') || currentPagePath.includes('/edit/') || currentPagePath.includes('/inbox/')) {
-                 console.log(`[ACTION_REDIRECT] On a specific sub-page (${currentPagePath}). Clicking "Messages" to return to the main board.`);
-                messagesLinkIfLoggedIn.click();
-            } else {
-                console.log('[ACTION_CHECK] On main board. No action needed.');
+            // 优先级1: 检查并处理看板上的未读消息列表
+            const unreadMessageLink = document.querySelector('a.BookingSummary--unread-sitter');
+            if (unreadMessageLink) {
+                console.log('[ACTION_UNREAD] Unread message list item found. Clicking it...');
+                unreadMessageLink.click();
+                return; // 点击后即完成本次任务
             }
+
+            // ========================= 【最终混合逻辑】 =========================
+            // 优先级2: 检查是否在可能需要跳转的子页面
+            const isPotentialSubPage = currentPagePath.includes('/users/') || currentPagePath.includes('/edit/') || currentPagePath.includes('/inbox/');
+
+            if (isPotentialSubPage) {
+                console.log(`[REDIRECT_CHECK] URL (${currentPagePath}) matches sub-page pattern.`);
+
+                // 覆盖检查(Override Check): 在决定跳转前，最后检查一次看板元素是否存在
+                const noticeBoardElement = document.querySelector('a.show-messages[href="#New Job Notice Board"]');
+
+                if (noticeBoardElement) {
+                    // 看板存在，说明这就是主页面，必须停止操作，否则会无限循环
+                    console.log('[OVERRIDE] Board element found. This is the correct page. Halting to prevent refresh loop.');
+                } else {
+                    // 看板不存在，说明这确实是需要返回的子页面（如/inbox/）
+                    console.log('[ACTION_REDIRECT] Board element NOT found. Redirecting back to main board.');
+                    messagesLinkIfLoggedIn.click();
+                }
+            } else {
+                 console.log(`[ACTION_CHECK] URL (${currentPagePath}) does not match sub-page pattern. No action needed.`);
+            }
+            // =================================================================
+
             console.log('--- Script Finished: Logged-in state handled. ---');
             return;
         }
 
-        // 如果未登录，执行登录流程
-        console.log('[STATE_CHECK] User not logged in, proceeding with login flow.');
-
-        // 获取凭据
+        // 3. 如果未登录且不在登录页，则导航到登录页
+        console.log('[STATE_CHECK] User not logged in. Redirecting to login page.');
         let email = GM_getValue(STORE_EMAIL_KEY);
-        let password = GM_getValue(STORE_PASSWORD_KEY);
-
-        if (!email || !password) {
-            window.alert('First run: please enter your login credentials. They will be encoded and stored locally.');
+        if (!email) {
+            window.alert('First run: please enter your login credentials. You will then be redirected to the login page.');
             email = window.prompt('Please enter your Catinaflat email address:');
-            if (email) {
-                password = window.prompt('Please enter your Catinaflat password:');
-            }
+            let password = email ? window.prompt('Please enter your Catinaflat password:') : null;
             if (email && password) {
                 GM_setValue(STORE_EMAIL_KEY, encodeBase64(email));
                 GM_setValue(STORE_PASSWORD_KEY, encodeBase64(password));
-            } else {
-                return;
+                window.location.href = LOGIN_PAGE_URL;
             }
         } else {
-            email = decodeBase64(email);
-            password = decodeBase64(password);
+            window.location.href = LOGIN_PAGE_URL;
         }
-
-        try {
-            const loginLink = document.querySelector('a#login-link') || document.querySelector('a[href*="/login"]');
-            if (!loginLink) throw new Error('Could not find the Login link.');
-            loginLink.click();
-
-            const emailField = await waitForElement('#email', 15000);
-            if (!emailField) throw new Error('Email input field not found.');
-            const passwordField = document.getElementById('password');
-            const signInButton = document.querySelector('.Form-foot .Btn--secondary[type="submit"]');
-            if (!passwordField || !signInButton) throw new Error('Failed to find all login form elements.');
-
-            emailField.value = email;
-            passwordField.value = password;
-            emailField.dispatchEvent(new Event('input', { bubbles: true }));
-            passwordField.dispatchEvent(new Event('input', { bubbles: true }));
-            signInButton.click();
-
-            const messagesLinkAfterLogin = await waitForElement('a.Masthead-userNavItemInner--messages[href*="/bookings"]', 25000);
-            if (messagesLinkAfterLogin) {
-                console.log('[POST_LOGIN] Login successful! Navigating to messages board...');
-                messagesLinkAfterLogin.click();
-            } else {
-                throw new Error('Failed to find "Messages" link after login attempt.');
-            }
-        } catch (error) {
-            console.error('[ERROR] Script encountered an error during login flow:', error.message);
-            window.alert(`Script error: ${error.message}`);
-        }
-        console.log('--- Script Finished ---');
     }
 
-    // 使用 DOMContentLoaded 会比 load 更早触发，可能更适合单页应用
-    window.addEventListener('DOMContentLoaded', executeAutoPilot);
+    window.addEventListener('load', executeAutoPilot);
 
 })();
