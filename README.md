@@ -147,8 +147,8 @@ FREQUENTLY ASKED QUESTIONS (FAQ)
 
 1. Q: I didn't receive an offline email alert after disconnecting. Why?
    问：我关闭了网页/断网了，为什么没有立即收到掉线报警邮件？
-   A: The system has two timers: the offline threshold (default: 20 mins) and the check interval (default: 10 mins). You must be offline for longer than the threshold, and the alert will only be sent after the next scheduled check runs. This can take between 20-30 minutes in total.
-   答：系统有两个时间：一个是掉线阈值（默认为20分钟），另一个是检查周期（触发器每10分钟运行一次）。您的脚本必须停止更新超过阈值时间，并且警报只会在下一次检查运行时才发送，所以总共可能需要等待20到30分钟。
+   A: The system has two timers: the offline threshold (default: 5 mins) and the check interval (default: 1 min). You must be offline for longer than the threshold, and the alert will only be sent after the next scheduled check runs. This can take between 20-30 minutes in total.
+   答：系统有两个时间：一个是掉线阈值（默认为5分钟），另一个是检查周期（触发器每1分钟运行一次）。您的脚本必须停止更新超过阈值时间，并且警报只会在下一次检查运行时才发送，所以总共可能需要等待20到30分钟。
 
 2. Q: I closed the webpage, but the logs in my Google Sheet are still updating. Why?
    问：我关闭了网页，为什么日志还在更新？
