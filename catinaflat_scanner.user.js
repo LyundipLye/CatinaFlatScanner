@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cat in a Flat UK Monitor
 // @namespace    http://tampermonkey.net/
-// @version      8.0.2
+// @version      8.0.3
 // @description  Cat in a Flat 网站监控脚本：新增本地唤醒检测，修复休眠后无提示问题；优化远程心跳检测逻辑。
 // @author       Gemini & CaitLye
 // @match        *://catinaflat.co.uk/*
@@ -16,8 +16,15 @@
 // @grant        GM_info
 // ==/UserScript==
 
+
 (function() {
     'use strict';
+
+    Object.defineProperty(unsafeWindow, 'dataLayer', {
+        value: { push: function() { console.log('GTM event blocked by CIAF script.'); } },
+        writable: false, // 不可重写
+        configurable: false // 不可重新配置
+    });
 
     // =================================================================================
     // == [1] 配置中心 (Configuration Center)
