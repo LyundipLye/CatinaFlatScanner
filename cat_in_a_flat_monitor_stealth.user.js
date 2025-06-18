@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Cat in a Flat UK Monitor (Silent Mode)
 // @namespace    http://tampermonkey.net/
-// @version      10.0
-// @description  【v10.0 最终方案】采用带可视化实时进度追踪的iFrame无痕检查，彻底解决测试反馈问题。
+// @version      10.1
+// @description  【v10.1 故障警报】抓取失败时不再发送无效状态，改为发送一次性的【严重警告】邮件，确保监控的真实可靠性。
 // @author       Gemini & CaitLye
 // @match        *://catinaflat.co.uk/*
 // @match        *://*.catinaflat.co.uk/*
@@ -11,6 +11,7 @@
 // @grant        GM_log
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_info
@@ -23,8 +24,8 @@
     // == [1] 配置中心 (Configuration Center)
     // =================================================================================
     const DEFAULTS = {
-        minCheckMinutes: 7, // 最小检查间隔 (分钟)
-        maxCheckMinutes: 10, // 最大检查间隔 (分钟)
+        minCheckMinutes: 7,
+        maxCheckMinutes: 10,
         googleScriptUrl: "https://script.google.com/macros/s/AKfycbykkMpNw5TvgisICLy9O6w2FYOSZiDKfCFS0RTTHO_cr_TYnO-ZOYNAoBpZacqKYeTl/exec",
         enableEmail: true,
         enableSound: true,
@@ -57,7 +58,7 @@
     let heartbeatIntervalId = null;
     let isTabStale = false;
     let gasFailureCheckIntervalId = null;
-    let isChecking = false; // 防止重复检查
+    let isChecking = false;
 
     // =================================================================================
     // == [3] 核心功能函数 (Core Functions)
@@ -121,7 +122,13 @@
         }
 
         GM_log(`⚙️ 正在处理消息数: ${newCount}`);
-        currentMessageCount = newCount; // 更新UI显示
+        currentMessageCount = newCount;
+
+        // v10.1 新增: 一旦成功处理，就重置抓取失败的警报标记
+        if (GM_getValue('fetch_failure_alert_sent', false)) {
+            GM_log("✅ 抓取功能已恢复，重置失败警报。");
+            GM_deleteValue('fetch_failure_alert_sent');
+        }
 
         let lastMessageCount = GM_getValue('lastMessageCount_uk', 0);
 
@@ -139,13 +146,33 @@
         }
     }
 
+    /**
+     * v10.1 新增: 统一处理抓取失败的逻辑
+     * @param {string} reason - 失败原因
+     */
+    function handleFetchFailure(reason) {
+        GM_log(`❌ 后台检查失败: ${reason}`);
+        // 检查是否已经发送过失败警报
+        if (!GM_getValue('fetch_failure_alert_sent', false)) {
+            GM_log("🚨 首次检测到抓取失败，准备发送警报邮件...");
+            sendGoogleScriptRequest({
+                subject: "【故障警告】监控脚本抓取失败！",
+                message: `你好，\n\n您的 Cat in a Flat 监控脚本在后台进行无痕检查时，未能成功抓取到消息数量。\n\n失败原因: ${reason}\n\n这很可能意味着网站的前端结构发生了改变，导致脚本无法定位元素。请尽快检查脚本和网站状况。\n\n为了避免邮件轰炸，在问题解决前，此邮件将只发送一次。\n\n时间: ${new Date().toLocaleString()}`
+            });
+            // 设置标记，防止重复发送
+            GM_setValue('fetch_failure_alert_sent', true);
+        } else {
+            GM_log("🚨 已发送过抓取失败警报，本次不再重复发送。");
+        }
+    }
+
     function performSilentCheck() {
         if (isChecking) {
             GM_log("🤫 上次检查仍在进行中，跳过本次。");
             return;
         }
         isChecking = true;
-        GM_log("🤫 开始执行 '画中画' 无痕后台检查 (v10.0)...");
+        GM_log("🤫 开始执行 '画中画' 无痕后台检查 (v10.1)...");
 
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
@@ -157,7 +184,7 @@
         };
 
         const outerTimeoutId = setTimeout(() => {
-            GM_log("❌ 后台检查总超时（45秒）。");
+            handleFetchFailure("后台检查总超时（45秒）。");
             cleanup();
         }, 45000);
 
@@ -175,35 +202,33 @@
 
                     if (countSpan) {
                         clearInterval(pollInterval);
-                        if (GM_getValue('logout_notified', false)) {
-                            GM_setValue('logout_notified', false);
-                        }
                         const newCount = parseInt(countSpan.textContent, 10);
                         processNewMessageCount(newCount, false);
                         cleanup();
                     } else if (Date.now() - pollStartTime > pollTimeout) {
                         clearInterval(pollInterval);
-                        GM_log("❌ 后台检查失败: 在iFrame内等待元素超时(20秒)。");
+                        let reason = "在iFrame内等待元素超时(20秒)，可能是网站结构已改变。";
                         if (doc.querySelector('#login-link')) {
-                            GM_log("🚨 原因：检测到掉线！准备发送邮件并刷新页面。");
+                            reason = "检测到掉线！准备刷新页面重新登录。";
                             if (!GM_getValue('logout_notified', false)) {
                                 sendLogoutEmail();
                                 GM_setValue('logout_notified', true);
                             }
                             setTimeout(() => window.location.reload(), 5000);
                         }
+                        handleFetchFailure(reason);
                         cleanup();
                     }
                 }, 500);
 
             } catch (error) {
-                GM_log("❌ 处理iFrame内容时出错: ", error);
+                handleFetchFailure(`处理iFrame内容时出错: ${error.message}`);
                 cleanup();
             }
         };
 
         iframe.onerror = function() {
-            GM_log("❌ iFrame加载失败，可能是网络或跨域问题。");
+            handleFetchFailure("iFrame加载失败，可能是网络或跨域问题。");
             cleanup();
         };
 
@@ -279,6 +304,11 @@
     }
 
     function sendRemoteStatus() {
+        // v10.1 修改: 如果消息数为N/A（意味着上次检查失败），则不发送无效的状态更新
+        if (currentMessageCount === 'N/A') {
+            GM_log("由于消息数未知，跳过本次GAS状态更新。");
+            return;
+        }
         const pageRefreshTotalSeconds = Math.max(0, Math.floor(checkCountdownRemainingTime / 1000));
         const pageRefreshMinutes = Math.floor(pageRefreshTotalSeconds / 60);
         const pageRefreshSeconds = pageRefreshTotalSeconds % 60;
@@ -479,9 +509,6 @@
     // == [5] UI创建与管理 (UI Creation & Management)
     // =================================================================================
 
-    /**
-     * v10.0 核心修改: 全新的测试函数，带实时UI反馈
-     */
     function testElementDiscovery() {
         const testBtn = document.getElementById('ciaf-test-discovery-btn');
         const statusDiv = document.getElementById('ciaf-test-status');
@@ -543,7 +570,7 @@
                     if (countSpan) {
                         clearInterval(pollInterval);
                         const count = countSpan.textContent.trim();
-                        cleanup(`✅ 抓取成功！ 已找到元素，值为: ${count}`, true);
+                        cleanup(`✅ <b>抓取成功！</b> 已找到元素，值为: ${count}`, true);
                     } else if (Date.now() - pollStartTime > pollTimeout) {
                         clearInterval(pollInterval);
                         let reason = "未知原因。可能是网站结构已改变。";
@@ -552,7 +579,7 @@
                         }
                         cleanup(`❌ <b>抓取失败！</b> 未能找到元素。<br>原因: ${reason}`, false);
                     }
-                }, 1000); // 每秒更新一次状态
+                }, 1000);
             } catch (error) {
                 cleanup(`❌ <b>测试时发生错误:</b> ${error.message}`, false);
             }
