@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Cat in a Flat UK Monitor (Silent Mode)
 // @namespace    http://tampermonkey.net/
-// @version      10.1
-// @description  【v10.1 故障警报】抓取失败时不再发送无效状态，改为发送一次性的【严重警告】邮件，确保监控的真实可靠性。
+// @version      10.8
+// @description  【v10.8 最终修复版】采用会话级变量重构故障警报逻辑，彻底修复了在某些情况下重复发送警报邮件的bug。
 // @author       Gemini & CaitLye
 // @match        *://catinaflat.co.uk/*
 // @match        *://*.catinaflat.co.uk/*
@@ -59,6 +59,9 @@
     let isTabStale = false;
     let gasFailureCheckIntervalId = null;
     let isChecking = false;
+    let audioCtx;
+    // v10.8 核心修改: 使用会话级变量代替GM存储来防止重复警报
+    let hasSentFailureAlertThisSession = false;
 
     // =================================================================================
     // == [3] 核心功能函数 (Core Functions)
@@ -120,18 +123,14 @@
             GM_log("❌ 处理消息数失败: 无效的数字。");
             return;
         }
-
         GM_log(`⚙️ 正在处理消息数: ${newCount}`);
         currentMessageCount = newCount;
-
-        // v10.1 新增: 一旦成功处理，就重置抓取失败的警报标记
-        if (GM_getValue('fetch_failure_alert_sent', false)) {
-            GM_log("✅ 抓取功能已恢复，重置失败警报。");
-            GM_deleteValue('fetch_failure_alert_sent');
+        // v10.8: 抓取成功后，重置会话级警报标记
+        if (hasSentFailureAlertThisSession) {
+            GM_log("✅ 抓取功能已恢复，重置本会话的失败警报标记。");
+            hasSentFailureAlertThisSession = false;
         }
-
         let lastMessageCount = GM_getValue('lastMessageCount_uk', 0);
-
         if (newCount > lastMessageCount) {
             GM_log(`🚀 ${isTest ? '【模拟】' : ''}探测到新消息！从 ${lastMessageCount} 条变为 ${newCount} 条。`);
             sendMasterNotification(newCount, isTest);
@@ -146,24 +145,79 @@
         }
     }
 
+    function updateTestStatus(message, color, clearAfter = 0) {
+        const statusDiv = document.getElementById('ciaf-test-status');
+        if (statusDiv) {
+            statusDiv.style.color = color;
+            statusDiv.innerHTML = message;
+            if (clearAfter > 0) {
+                setTimeout(() => { if (statusDiv.innerHTML === message) statusDiv.innerHTML = ''; }, clearAfter);
+            }
+        }
+    }
+
     /**
-     * v10.1 新增: 统一处理抓取失败的逻辑
-     * @param {string} reason - 失败原因
+     * v10.8 核心修改: 使用会话级变量
      */
     function handleFetchFailure(reason) {
         GM_log(`❌ 后台检查失败: ${reason}`);
-        // 检查是否已经发送过失败警报
-        if (!GM_getValue('fetch_failure_alert_sent', false)) {
+        if (!hasSentFailureAlertThisSession) {
             GM_log("🚨 首次检测到抓取失败，准备发送警报邮件...");
-            sendGoogleScriptRequest({
-                subject: "【故障警告】监控脚本抓取失败！",
+            updateTestStatus("🚨 检测到抓取失败！正在发送警报邮件...", 'orange');
+            const emailData = {
+                subject: "【严重警告】监控脚本抓取失败！",
                 message: `你好，\n\n您的 Cat in a Flat 监控脚本在后台进行无痕检查时，未能成功抓取到消息数量。\n\n失败原因: ${reason}\n\n这很可能意味着网站的前端结构发生了改变，导致脚本无法定位元素。请尽快检查脚本和网站状况。\n\n为了避免邮件轰炸，在问题解决前，此邮件将只发送一次。\n\n时间: ${new Date().toLocaleString()}`
-            });
-            // 设置标记，防止重复发送
-            GM_setValue('fetch_failure_alert_sent', true);
+            };
+            sendGoogleScriptRequest(emailData, true);
+            hasSentFailureAlertThisSession = true;
+            GM_log("🚨 已设置本会话的失败警报标记。");
         } else {
             GM_log("🚨 已发送过抓取失败警报，本次不再重复发送。");
         }
+    }
+
+    function sendGoogleScriptRequest(data, isFailureAlert = false) {
+        if (!config.googleScriptUrl || !config.googleScriptUrl.startsWith("https://script.google.com/")) {
+            GM_log("Google Apps Script URL 未配置或无效。");
+            if (isFailureAlert) updateTestStatus("❌ <b>警报邮件发送失败:</b> GAS URL 未配置。", 'red');
+            return;
+        }
+        GM_log(`正在向 GAS 发送请求`, data);
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: config.googleScriptUrl,
+            headers: { "Content-Type": "text/plain;charset=UTF-8" },
+            data: JSON.stringify(data),
+            onload: (response) => {
+                GM_log(`GAS请求成功！状态: ${response.status}`);
+                if (response.status === 200 && response.responseText.includes("Success")) {
+                    if (data.type === 'statusUpdate') {
+                        lastSuccessfulSendTimestamp = Date.now();
+                        GM_setValue('lastSuccessfulSendTimestamp_cat', lastSuccessfulSendTimestamp);
+                        GM_log(`已更新上次成功发送时间戳: ${new Date(lastSuccessfulSendTimestamp).toLocaleString()}`);
+                    }
+                    if (isFailureAlert) {
+                        updateTestStatus("✅ <b>故障警报邮件</b> 已成功发送至服务器。", 'green', 15000);
+                    }
+                } else {
+                    if (isFailureAlert) {
+                        updateTestStatus(`❌ <b>故障警报邮件</b> 发送失败！<br>服务器响应: ${response.status}`, 'red');
+                    }
+                }
+            },
+            onerror: (response) => {
+                GM_log(`GAS请求网络错误:`, response);
+                if (isFailureAlert) updateTestStatus("❌ <b>故障警报邮件</b> 发送失败！<br>网络错误。", 'red');
+            },
+            ontimeout: () => {
+                GM_log(`GAS请求超时！`);
+                if (isFailureAlert) updateTestStatus("❌ <b>故障警报邮件</b> 发送失败！<br>请求超时。", 'red');
+            },
+            onabort: () => {
+                GM_log(`GAS请求被中止！`);
+                if (isFailureAlert) updateTestStatus("❌ <b>故障警报邮件</b> 发送失败！<br>请求被中止。", 'red');
+            }
+        });
     }
 
     function performSilentCheck() {
@@ -172,7 +226,7 @@
             return;
         }
         isChecking = true;
-        GM_log("🤫 开始执行 '画中画' 无痕后台检查 (v10.1)...");
+        GM_log("🤫 开始执行 '画中画' 无痕后台检查 (v10.8)...");
 
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
@@ -276,35 +330,7 @@
         mainLoop();
     }
 
-    function sendGoogleScriptRequest(data) {
-        if (!config.googleScriptUrl || !config.googleScriptUrl.startsWith("https://script.google.com/")) {
-            GM_log("Google Apps Script URL 未配置或无效。");
-            return;
-        }
-        GM_log(`正在向 GAS 发送请求`, data);
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: config.googleScriptUrl,
-            headers: { "Content-Type": "text/plain;charset=UTF-8" },
-            data: JSON.stringify(data),
-            onload: (response) => {
-                GM_log(`GAS请求成功！状态: ${response.status}`);
-                if (response.status === 200 && response.responseText.includes("Success")) {
-                    if (data.type === 'statusUpdate') {
-                        lastSuccessfulSendTimestamp = Date.now();
-                        GM_setValue('lastSuccessfulSendTimestamp_cat', lastSuccessfulSendTimestamp);
-                        GM_log(`已更新上次成功发送时间戳: ${new Date(lastSuccessfulSendTimestamp).toLocaleString()}`);
-                    }
-                }
-            },
-            onerror: (response) => { GM_log(`GAS请求错误:`, response); },
-            ontimeout: () => { GM_log(`GAS请求超时！`); },
-            onabort: () => { GM_log(`GAS请求被中止！`); }
-        });
-    }
-
     function sendRemoteStatus() {
-        // v10.1 修改: 如果消息数为N/A（意味着上次检查失败），则不发送无效的状态更新
         if (currentMessageCount === 'N/A') {
             GM_log("由于消息数未知，跳过本次GAS状态更新。");
             return;
@@ -318,8 +344,7 @@
             countdown: formattedPageRefreshCountdown,
             messageCount: currentMessageCount,
         };
-        GM_log(`发送状态更新到GAS: 倒计时=${formattedPageRefreshCountdown}, 消息数=${currentMessageCount}`);
-        sendGoogleScriptRequest(statusData);
+        sendGoogleScriptRequest(statusData, false);
     }
 
     function sendLogoutEmail() {
@@ -355,21 +380,49 @@
         }
     }
 
+    function initAudioContext() {
+        if (audioCtx && audioCtx.state !== 'closed') return;
+        try {
+            audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+            GM_log("音频上下文已初始化。");
+        } catch (e) {
+            GM_log("❌ 无法初始化音频上下文:", e);
+        }
+    }
+
+    function _doPlaySound() {
+        if (!audioCtx) {
+            GM_log("⚠️ 音频上下文不可用，无法播放声音。");
+            return;
+        }
+        try {
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(0.5, audioCtx.currentTime);
+            oscillator.start();
+            oscillator.stop(audioCtx.currentTime + 0.5);
+        } catch (e) {
+            GM_log("❌ 播放提示音时出错:", e);
+        }
+    }
+
     function playSound() {
         if (!config.enableSound) return;
-        try {
-            const audioContext = new(window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
-            oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(880, audioContext.currentTime);
-            gainNode.gain.setValueAtTime(0.5, audioContext.currentTime);
-            oscillator.start();
-            oscillator.stop(audioContext.currentTime + 5);
-        } catch (e) {
-            GM_log("无法播放提示音。", e);
+        if (!audioCtx) {
+             GM_log("⚠️ 声音播放失败：音频上下文未由用户手势激活。");
+             return;
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().then(() => {
+                GM_log("音频上下文已恢复，正在播放声音。");
+                _doPlaySound();
+            });
+        } else {
+            _doPlaySound();
         }
     }
 
@@ -449,10 +502,6 @@
         });
     }
 
-    // =================================================================================
-    // == [4] 告警系统 (Alerting Systems)
-    // =================================================================================
-
     function startTabHeartbeatMonitor() {
         if (heartbeatIntervalId) clearInterval(heartbeatIntervalId);
         const checkInterval = 60 * 1000;
@@ -505,19 +554,10 @@
         }
     }
 
-    // =================================================================================
-    // == [5] UI创建与管理 (UI Creation & Management)
-    // =================================================================================
-
     function testElementDiscovery() {
         const testBtn = document.getElementById('ciaf-test-discovery-btn');
-        const statusDiv = document.getElementById('ciaf-test-status');
-
         if (isChecking) {
-            const msg = "一个检查已在进行中，请稍后再试。";
-            GM_log(`⚠️ ${msg}`);
-            statusDiv.textContent = msg;
-            statusDiv.style.color = 'orange';
+            updateTestStatus("一个检查已在进行中，请稍后再试。", 'orange');
             return;
         }
         isChecking = true;
@@ -525,27 +565,19 @@
         testBtn.textContent = "测试中...";
         testBtn.disabled = true;
 
-        const updateStatus = (message, color = 'blue') => {
-            GM_log(`[测试抓取] ${message}`);
-            statusDiv.style.color = color;
-            statusDiv.innerHTML = message;
-        };
-
-        updateStatus("[1/4] 开始执行...");
+        updateTestStatus("[1/4] 开始执行...", 'blue');
 
         const iframe = document.createElement('iframe');
         iframe.style.display = 'none';
 
         const cleanup = (resultMsg, isSuccess) => {
-            updateStatus(`[4/4] ${resultMsg}`, isSuccess ? 'green' : 'red');
+            updateTestStatus(`[4/4] ${resultMsg}`, isSuccess ? 'green' : 'red', 15000);
             clearTimeout(outerTimeoutId);
             if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
             isChecking = false;
 
             testBtn.textContent = "① 测试抓取";
             testBtn.disabled = false;
-
-            setTimeout(() => { statusDiv.innerHTML = ''; }, 15000); // 15秒后清除状态
         };
 
         const outerTimeoutId = setTimeout(() => {
@@ -554,7 +586,7 @@
 
         iframe.onload = function() {
             try {
-                updateStatus("[2/4] iFrame已加载，开始轮询等待...");
+                updateTestStatus("[2/4] iFrame已加载，开始轮询等待...", 'blue');
                 const doc = iframe.contentDocument || iframe.contentWindow.document;
                 if (!doc) throw new Error("无法访问iFrame文档。");
 
@@ -564,7 +596,7 @@
 
                 pollInterval = setInterval(() => {
                     const elapsed = Math.round((Date.now() - pollStartTime) / 1000);
-                    updateStatus(`[3/4] 轮询中 (已过 ${elapsed} 秒)...`);
+                    updateTestStatus(`[3/4] 轮询中 (已过 ${elapsed} 秒)...`, 'blue');
 
                     const countSpan = doc.querySelector("a.show-messages[href='#New Job Notice Board'] span[data-bind='text: messages().length']");
                     if (countSpan) {
@@ -586,7 +618,7 @@
         };
         iframe.onerror = () => cleanup("❌ <b>测试失败：</b>iFrame加载错误。", false);
 
-        updateStatus("[1/4] 正在创建并加载隐形iFrame...");
+        updateTestStatus("[1/4] 正在创建并加载隐形iFrame...", 'blue');
         iframe.src = window.location.href;
         document.body.appendChild(iframe);
     }
@@ -720,20 +752,16 @@
 
         panel.querySelector('#ciaf-test-simulation-btn').onclick = () => {
             GM_log("② 开始模拟通知 (根部模拟)...");
-            const statusDiv = document.getElementById('ciaf-test-status');
             try {
                 const lastMessageCount = GM_getValue('lastMessageCount_uk', 0);
                 const simulatedNewCount = lastMessageCount + 1;
                 GM_log(`模拟数据: 上次消息数=${lastMessageCount}, 模拟新消息数=${simulatedNewCount}`);
                 processNewMessageCount(simulatedNewCount, true);
-                statusDiv.style.color = 'green';
-                statusDiv.innerHTML = `✅ <b>模拟通知成功！</b> 已触发一个【测试】通知流程。`;
+                updateTestStatus(`✅ <b>模拟通知成功！</b> 已触发一个【测试】通知流程。`, 'green', 10000);
             } catch (e) {
                 GM_log("❌ 模拟通知失败:", e);
-                statusDiv.style.color = 'red';
-                statusDiv.innerHTML = `❌ <b>模拟通知失败:</b> ${e.message}`;
+                updateTestStatus(`❌ <b>模拟通知失败:</b> ${e.message}`, 'red');
             }
-            setTimeout(() => { statusDiv.innerHTML = ''; }, 10000);
         };
 
         panel.querySelector('#ciaf-test-sheet-btn').onclick = () => { sendRemoteStatus(); alert("状态更新请求已发送！"); };
@@ -808,6 +836,8 @@
     function main() {
         loadConfig();
         loadScriptLogs();
+        // v10.6 核心修复: 移除错误的flag重置逻辑
+        // GM_deleteValue('fetch_failure_alert_sent');
         window.addEventListener('beforeunload', saveScriptLogs);
 
         setTimeout(() => {
@@ -822,6 +852,9 @@
             startGasSendCountdown();
             startTabHeartbeatMonitor();
             startGasFailureChecker();
+
+            document.body.addEventListener('click', initAudioContext, { once: true });
+            document.body.addEventListener('keydown', initAudioContext, { once: true });
         }, 2000);
     }
 
