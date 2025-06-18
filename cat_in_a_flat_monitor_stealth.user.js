@@ -165,7 +165,7 @@
             GM_log("🚨 首次检测到抓取失败，准备发送警报邮件...");
             updateTestStatus("🚨 检测到抓取失败！正在发送警报邮件...", 'orange');
             const emailData = {
-                subject: "【严重警告】监控脚本抓取失败！",
+                subject: "【故障警告】监控脚本抓取失败！",
                 message: `你好，\n\n您的 Cat in a Flat 监控脚本在后台进行无痕检查时，未能成功抓取到消息数量。\n\n失败原因: ${reason}\n\n这很可能意味着网站的前端结构发生了改变，导致脚本无法定位元素。请尽快检查脚本和网站状况。\n\n为了避免邮件轰炸，在问题解决前，此邮件将只发送一次。\n\n时间: ${new Date().toLocaleString()}`
             };
             sendGoogleScriptRequest(emailData, true);
