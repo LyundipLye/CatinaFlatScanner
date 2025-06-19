@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Cat in a Flat UK Monitor (Silent Mode)
 // @namespace    http://tampermonkey.net/
-// @version      10.8
-// @description  【v10.8 最终修复版】采用会话级变量重构故障警报逻辑，彻底修复了在某些情况下重复发送警报邮件的bug。
+// @version      11.0
+// @description  【v11.0 开发者模式】新增可视化调试模式，可选择将后台检查的iFrame窗口显示出来，便于观察和调试。
 // @author       Gemini & CaitLye
 // @match        *://catinaflat.co.uk/*
 // @match        *://*.catinaflat.co.uk/*
@@ -33,6 +33,7 @@
         enableTitleFlash: true,
         pauseWhileTyping: true,
         gasFailureAlertMinutes: 30,
+        debug_show_iframe: false, // v11.0 新增: 调试开关
     };
 
     let config = {};
@@ -60,7 +61,6 @@
     let gasFailureCheckIntervalId = null;
     let isChecking = false;
     let audioCtx;
-    // v10.8 核心修改: 使用会话级变量代替GM存储来防止重复警报
     let hasSentFailureAlertThisSession = false;
 
     // =================================================================================
@@ -85,14 +85,17 @@
 
     const originalGmLog = GM_log;
     GM_log = function(...args) {
-        originalGmLog.apply(this, args);
-        const timestamp = new Date().toLocaleTimeString();
-        let logMessage = args.map(arg => {
+        const now = new Date();
+        const timestamp = now.toLocaleTimeString('en-GB');
+        const ms = String(now.getMilliseconds()).padStart(3, '0');
+        const consoleArgs = [`[${ms}]`, ...args];
+        originalGmLog.apply(this, consoleArgs);
+        let uiMessage = args.map(arg => {
             if (arg instanceof Error) return arg.stack || arg.message;
             if (typeof arg === 'object' && arg !== null) return JSON.stringify(arg, null, 2);
             return String(arg);
         }).join(' ');
-        scriptLogs.push(`[${timestamp}] ${logMessage}`);
+        scriptLogs.push(`[${timestamp}] ${uiMessage}`);
         if (scriptLogs.length > SCRIPT_LOGS_MAX_LINES) scriptLogs.shift();
         updateScriptLogDisplay();
     };
@@ -125,7 +128,6 @@
         }
         GM_log(`⚙️ 正在处理消息数: ${newCount}`);
         currentMessageCount = newCount;
-        // v10.8: 抓取成功后，重置会话级警报标记
         if (hasSentFailureAlertThisSession) {
             GM_log("✅ 抓取功能已恢复，重置本会话的失败警报标记。");
             hasSentFailureAlertThisSession = false;
@@ -156,9 +158,6 @@
         }
     }
 
-    /**
-     * v10.8 核心修改: 使用会话级变量
-     */
     function handleFetchFailure(reason) {
         GM_log(`❌ 后台检查失败: ${reason}`);
         if (!hasSentFailureAlertThisSession) {
@@ -220,30 +219,51 @@
         });
     }
 
-    function performSilentCheck() {
+    function performSilentCheck(isTest = false) {
+        const statusDiv = isTest ? document.getElementById('ciaf-test-status') : null;
+
         if (isChecking) {
             GM_log("🤫 上次检查仍在进行中，跳过本次。");
+            if(isTest) updateTestStatus("一个检查已在进行中，请稍后再试。", 'orange');
             return;
         }
         isChecking = true;
-        GM_log("🤫 开始执行 '画中画' 无痕后台检查 (v10.8)...");
+
+        const modeText = isTest ? "测试抓取" : "后台检查";
+        GM_log(`🤫 开始执行 '画中画' ${modeText} (v11.0)...`);
+        if (isTest) updateTestStatus("[1/4] 开始执行...", 'blue');
 
         const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
+        // v11.0 核心修改: 根据配置决定是否显示iframe
+        if (config.debug_show_iframe) {
+            iframe.style.position = 'fixed';
+            iframe.style.top = '10px';
+            iframe.style.right = '10px';
+            iframe.style.width = '500px';
+            iframe.style.height = '400px';
+            iframe.style.border = '2px solid red';
+            iframe.style.zIndex = '10001';
+            iframe.style.backgroundColor = 'white';
+        } else {
+            iframe.style.display = 'none';
+        }
 
-        const cleanup = () => {
+        const cleanup = (resultMsg, isSuccess) => {
+            if (isTest) updateTestStatus(`[4/4] ${resultMsg}`, isSuccess ? 'green' : 'red', 15000);
             clearTimeout(outerTimeoutId);
             if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
             isChecking = false;
         };
 
         const outerTimeoutId = setTimeout(() => {
-            handleFetchFailure("后台检查总超时（45秒）。");
+            if (isTest) cleanup("❌ <b>测试失败：</b>总操作超时(45秒)。", false);
+            else handleFetchFailure("后台检查总超时（45秒）。");
             cleanup();
         }, 45000);
 
         iframe.onload = function() {
             try {
+                if(isTest) updateTestStatus("[2/4] iFrame已加载，开始轮询等待...", 'blue');
                 const doc = iframe.contentDocument || iframe.contentWindow.document;
                 if (!doc) throw new Error("无法访问iFrame文档。");
 
@@ -252,40 +272,58 @@
                 const pollStartTime = Date.now();
 
                 pollInterval = setInterval(() => {
-                    const countSpan = doc.querySelector("a.show-messages[href='#New Job Notice Board'] span[data-bind='text: messages().length']");
+                    if(isTest) {
+                        const elapsed = Math.round((Date.now() - pollStartTime) / 1000);
+                        updateTestStatus(`[3/4] 轮询中 (已过 ${elapsed} 秒)...`, 'blue');
+                    }
 
+                    const countSpan = doc.querySelector("a.show-messages[href='#New Job Notice Board'] span[data-bind='text: messages().length']");
                     if (countSpan) {
                         clearInterval(pollInterval);
                         const newCount = parseInt(countSpan.textContent, 10);
-                        processNewMessageCount(newCount, false);
-                        cleanup();
+
+                        if(isTest) {
+                           cleanup(`✅ <b>抓取成功！</b> 已找到元素，值为: ${newCount}`, true);
+                        } else {
+                           processNewMessageCount(newCount, false);
+                           cleanup();
+                        }
                     } else if (Date.now() - pollStartTime > pollTimeout) {
                         clearInterval(pollInterval);
                         let reason = "在iFrame内等待元素超时(20秒)，可能是网站结构已改变。";
                         if (doc.querySelector('#login-link')) {
-                            reason = "检测到掉线！准备刷新页面重新登录。";
-                            if (!GM_getValue('logout_notified', false)) {
-                                sendLogoutEmail();
-                                GM_setValue('logout_notified', true);
+                            reason = "您当前处于掉线状态。";
+                            if (!isTest) {
+                                if (!GM_getValue('logout_notified', false)) {
+                                    sendLogoutEmail();
+                                    GM_setValue('logout_notified', true);
+                                }
+                                setTimeout(() => window.location.reload(), 5000);
                             }
-                            setTimeout(() => window.location.reload(), 5000);
                         }
-                        handleFetchFailure(reason);
-                        cleanup();
+                        if(isTest) {
+                            cleanup(`❌ <b>抓取失败！</b> 未能找到元素。<br>原因: ${reason}`, false);
+                        } else {
+                            handleFetchFailure(reason);
+                            cleanup();
+                        }
                     }
                 }, 500);
 
             } catch (error) {
-                handleFetchFailure(`处理iFrame内容时出错: ${error.message}`);
+                if(isTest) cleanup(`❌ <b>测试时发生错误:</b> ${error.message}`, false);
+                else handleFetchFailure(`处理iFrame内容时出错: ${error.message}`);
                 cleanup();
             }
         };
 
         iframe.onerror = function() {
-            handleFetchFailure("iFrame加载失败，可能是网络或跨域问题。");
+            if(isTest) cleanup("❌ <b>测试失败：</b>iFrame加载错误。", false);
+            else handleFetchFailure("iFrame加载失败，可能是网络或跨域问题。");
             cleanup();
         };
 
+        if(isTest) updateTestStatus("[1/4] 正在创建并加载隐形iFrame...", 'blue');
         iframe.src = window.location.href;
         document.body.appendChild(iframe);
     }
@@ -554,75 +592,6 @@
         }
     }
 
-    function testElementDiscovery() {
-        const testBtn = document.getElementById('ciaf-test-discovery-btn');
-        if (isChecking) {
-            updateTestStatus("一个检查已在进行中，请稍后再试。", 'orange');
-            return;
-        }
-        isChecking = true;
-
-        testBtn.textContent = "测试中...";
-        testBtn.disabled = true;
-
-        updateTestStatus("[1/4] 开始执行...", 'blue');
-
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-
-        const cleanup = (resultMsg, isSuccess) => {
-            updateTestStatus(`[4/4] ${resultMsg}`, isSuccess ? 'green' : 'red', 15000);
-            clearTimeout(outerTimeoutId);
-            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-            isChecking = false;
-
-            testBtn.textContent = "① 测试抓取";
-            testBtn.disabled = false;
-        };
-
-        const outerTimeoutId = setTimeout(() => {
-            cleanup("❌ <b>测试失败：</b>总操作超时(45秒)。", false);
-        }, 45000);
-
-        iframe.onload = function() {
-            try {
-                updateTestStatus("[2/4] iFrame已加载，开始轮询等待...", 'blue');
-                const doc = iframe.contentDocument || iframe.contentWindow.document;
-                if (!doc) throw new Error("无法访问iFrame文档。");
-
-                let pollInterval;
-                const pollTimeout = 20000;
-                const pollStartTime = Date.now();
-
-                pollInterval = setInterval(() => {
-                    const elapsed = Math.round((Date.now() - pollStartTime) / 1000);
-                    updateTestStatus(`[3/4] 轮询中 (已过 ${elapsed} 秒)...`, 'blue');
-
-                    const countSpan = doc.querySelector("a.show-messages[href='#New Job Notice Board'] span[data-bind='text: messages().length']");
-                    if (countSpan) {
-                        clearInterval(pollInterval);
-                        const count = countSpan.textContent.trim();
-                        cleanup(`✅ <b>抓取成功！</b> 已找到元素，值为: ${count}`, true);
-                    } else if (Date.now() - pollStartTime > pollTimeout) {
-                        clearInterval(pollInterval);
-                        let reason = "未知原因。可能是网站结构已改变。";
-                        if(doc.querySelector('#login-link')) {
-                            reason = "您当前处于掉线状态。";
-                        }
-                        cleanup(`❌ <b>抓取失败！</b> 未能找到元素。<br>原因: ${reason}`, false);
-                    }
-                }, 1000);
-            } catch (error) {
-                cleanup(`❌ <b>测试时发生错误:</b> ${error.message}`, false);
-            }
-        };
-        iframe.onerror = () => cleanup("❌ <b>测试失败：</b>iFrame加载错误。", false);
-
-        updateTestStatus("[1/4] 正在创建并加载隐形iFrame...", 'blue');
-        iframe.src = window.location.href;
-        document.body.appendChild(iframe);
-    }
-
     function createUI() {
         GM_addStyle(`
             .ciaf-ui-container { position: fixed; bottom: 20px; left: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; font-family: Arial, sans-serif; background-color: rgba(0, 0, 0, 0.7); color: white; border-radius: 8px; padding: 10px 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); font-size: 14px; line-height: 1.4; min-width: 220px; text-align: left; }
@@ -720,6 +689,7 @@
                     <div class="form-group">
                         <label>高级设置</label>
                         <label><input type="checkbox" id="ciaf-pause-typing"> 输入时暂停计时</label>
+                        <label><input type="checkbox" id="ciaf-debug-iframe"> [Debug] 显示后台检查窗口</label>
                     </div>
                     <div class="ciaf-test-buttons-section">
                         <button id="ciaf-test-discovery-btn" class="ciaf-button" style="background-color:#dc3545 !important;">① 测试抓取</button>
@@ -748,7 +718,7 @@
         panel.querySelector('#ciaf-reset-settings-btn').onclick = resetConfig;
         panel.querySelector('#ciaf-clear-log-btn').onclick = clearScriptLogs;
 
-        panel.querySelector('#ciaf-test-discovery-btn').onclick = testElementDiscovery;
+        panel.querySelector('#ciaf-test-discovery-btn').onclick = () => performSilentCheck(true);
 
         panel.querySelector('#ciaf-test-simulation-btn').onclick = () => {
             GM_log("② 开始模拟通知 (根部模拟)...");
@@ -788,6 +758,7 @@
         document.getElementById('ciaf-enable-popup').checked = config.enablePopup;
         document.getElementById('ciaf-enable-titleflash').checked = config.enableTitleFlash;
         document.getElementById('ciaf-pause-typing').checked = config.pauseWhileTyping;
+        document.getElementById('ciaf-debug-iframe').checked = config.debug_show_iframe;
     }
 
     function applySettingsFromPanel() {
@@ -800,6 +771,7 @@
         config.enablePopup = document.getElementById('ciaf-enable-popup').checked;
         config.enableTitleFlash = document.getElementById('ciaf-enable-titleflash').checked;
         config.pauseWhileTyping = document.getElementById('ciaf-pause-typing').checked;
+        config.debug_show_iframe = document.getElementById('ciaf-debug-iframe').checked;
 
         saveConfig();
         document.getElementById('ciaf-settings-panel').classList.remove('visible');
@@ -836,8 +808,6 @@
     function main() {
         loadConfig();
         loadScriptLogs();
-        // v10.6 核心修复: 移除错误的flag重置逻辑
-        // GM_deleteValue('fetch_failure_alert_sent');
         window.addEventListener('beforeunload', saveScriptLogs);
 
         setTimeout(() => {
